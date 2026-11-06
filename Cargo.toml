@@ -71,7 +71,7 @@ gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_util = { path = "crates/gpui_util" }
 gpui_web = { path = "crates/gpui_web", default-features = false }
 gpui_wgpu = { path = "crates/gpui_wgpu" }
-gpui_windows = { path = "crates/gpui_windows", default-features = false }
+gpui_windows = { path = "crates/gpui_windows", package = "gpui-fast-windows", default-features = false }
 http_client = { path = "crates/http_client" }
 http_client_tls = { path = "crates/http_client_tls" }
 path = { path = "crates/path" }

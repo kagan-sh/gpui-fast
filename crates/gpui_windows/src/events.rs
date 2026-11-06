@@ -1321,13 +1321,17 @@ impl WindowsWindowInner {
         }
         let devices = lparam.0 as *const DirectXDevices;
         let devices = unsafe { &*devices };
-        if let Err(err) = self
-            .state
-            .renderer
-            .borrow_mut()
-            .handle_device_lost(&devices)
-        {
-            panic!("Device lost: {err}");
+        // The window procedure cannot unwind. A busy renderer, or a rebuild
+        // that fails, is tried again on the next frame.
+        let Ok(mut renderer) = self.state.renderer.try_borrow_mut() else {
+            log::error!("DirectX device lost while drawing; retrying");
+            self.retry_lost_device();
+            return Some(0);
+        };
+        if let Err(err) = renderer.handle_device_lost(devices) {
+            log::error!("DirectX device lost: {err:#}");
+            self.retry_lost_device();
+            return Some(0);
         }
         // Make sure the first `draw_window` after recovery (whether it comes
         // from the forced WM_GPUI_FORCE_UPDATE_WINDOW or a stray WM_PAINT in
@@ -1337,6 +1341,11 @@ impl WindowsWindowInner {
         #[cfg(test)]
         crate::fast::native_tests::recovered();
         Some(0)
+    }
+
+    fn retry_lost_device(&self) {
+        self.state.invalidate_devices.store(true, Ordering::Release);
+        crate::fast::frame_schedule::FrameRequest::request(&self.state.fast_frame_request);
     }
 
     fn handle_dm_pointer_hit_test(&self, wparam: WPARAM) -> Option<isize> {

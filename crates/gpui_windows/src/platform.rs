@@ -452,7 +452,7 @@ impl WindowsPlatform {
             .spawn(move || {
                 let vsync_provider = VSyncProvider::new();
                 let mut fast_worker = crate::fast::frame_schedule::Worker::new(
-                    fast_frame_wake,
+                    fast_frame_wake.clone(),
                     &directx_device.device,
                 );
                 while crate::fast::frame_schedule::Worker::wait(&fast_worker, &stop) {
@@ -471,7 +471,9 @@ impl WindowsPlatform {
                             &all_windows,
                             &text_system,
                         ) {
-                            panic!("Device lost: {err}");
+                            log::error!("DirectX device lost: {err:#}");
+                            fast_frame_wake.request();
+                            continue;
                         }
                         crate::fast::frame_schedule::Worker::watch(
                             &mut fast_worker,
