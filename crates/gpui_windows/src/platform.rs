@@ -1860,6 +1860,15 @@ impl WindowsPlatformInner {
     }
 }
 
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("unknown panic")
+        .to_owned()
+}
+
 unsafe extern "system" fn window_procedure(
     hwnd: HWND,
     msg: u32,
@@ -1904,14 +1913,16 @@ unsafe extern "system" fn window_procedure(
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     };
     let _depth = WndProcDepth::enter(&inner);
-    let result = if cfg!(debug_assertions) {
-        let inner = std::panic::AssertUnwindSafe(inner);
-        match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam)) {
-            Ok(result) => result,
-            Err(_) => std::process::abort(),
+    // This procedure cannot unwind. A panic here aborts the process, which is
+    // what opening a Browser page did after a nested DirectX or WebView2 pump.
+    let inner = std::panic::AssertUnwindSafe(inner);
+    let result = match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam))
+    {
+        Ok(result) => result,
+        Err(payload) => {
+            log::error!("window procedure panicked: {}", panic_message(&payload));
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
-    } else {
-        inner.handle_msg(hwnd, msg, wparam, lparam)
     };
 
     if msg == WM_NCDESTROY {
