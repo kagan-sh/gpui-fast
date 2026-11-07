@@ -1309,6 +1309,15 @@ impl WindowsPlatformInner {
 
     #[inline]
     fn run_foreground_task(&self) -> Option<isize> {
+        // WebView2 and other COM calls pump messages while an update still holds
+        // the app. A task run from that pump borrows it again and panics, and the
+        // page's composition visual is then never removed. Leave the runnable
+        // queued; the outermost procedure wakes it after that borrow ends.
+        if WNDPROC_DEPTH.with(Cell::get) > 1 {
+            FOREGROUND_DEFERRED.set(true);
+            return Some(0);
+        }
+
         const MAIN_TASK_TIMEOUT: u128 = 10;
 
         let start = std::time::Instant::now();
@@ -1806,6 +1815,51 @@ fn register_platform_window_class() {
     unsafe { RegisterClassW(&wc) };
 }
 
+thread_local! {
+    static WNDPROC_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static FOREGROUND_DEFERRED: Cell<bool> = const { Cell::new(false) };
+}
+
+struct WndProcDepth {
+    inner: Rc<WindowsPlatformInner>,
+}
+
+impl WndProcDepth {
+    fn enter(inner: &Rc<WindowsPlatformInner>) -> Self {
+        WNDPROC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+        Self {
+            inner: inner.clone(),
+        }
+    }
+}
+
+impl Drop for WndProcDepth {
+    fn drop(&mut self) {
+        let root = WNDPROC_DEPTH.with(|depth| {
+            let next = depth.get().saturating_sub(1);
+            depth.set(next);
+            next == 0
+        });
+        if root && FOREGROUND_DEFERRED.replace(false) {
+            self.inner.post_foreground_wake();
+        }
+    }
+}
+
+impl WindowsPlatformInner {
+    fn post_foreground_wake(&self) {
+        self.dispatcher.wake_posted.store(true, Ordering::Release);
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.dispatcher.platform_window_handle.as_raw()),
+                WM_GPUI_TASK_DISPATCHED_ON_MAIN_THREAD,
+                WPARAM(self.validation_number),
+                LPARAM(0),
+            );
+        }
+    }
+}
+
 unsafe extern "system" fn window_procedure(
     hwnd: HWND,
     msg: u32,
@@ -1846,18 +1900,18 @@ unsafe extern "system" fn window_procedure(
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
     let inner = unsafe { &*ptr };
-    let result = if let Some(inner) = inner.upgrade() {
-        if cfg!(debug_assertions) {
-            let inner = std::panic::AssertUnwindSafe(inner);
-            match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam)) {
-                Ok(result) => result,
-                Err(_) => std::process::abort(),
-            }
-        } else {
-            inner.handle_msg(hwnd, msg, wparam, lparam)
+    let Some(inner) = inner.upgrade() else {
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    };
+    let _depth = WndProcDepth::enter(&inner);
+    let result = if cfg!(debug_assertions) {
+        let inner = std::panic::AssertUnwindSafe(inner);
+        match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam)) {
+            Ok(result) => result,
+            Err(_) => std::process::abort(),
         }
     } else {
-        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        inner.handle_msg(hwnd, msg, wparam, lparam)
     };
 
     if msg == WM_NCDESTROY {
