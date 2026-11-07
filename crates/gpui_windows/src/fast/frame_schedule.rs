@@ -115,9 +115,9 @@ pub(crate) fn frame_wake(coordinator: &DrawCoordinator) -> Arc<FrameWake> {
 
 /// Takes a window's pending request; the worker redraws only windows that asked for a frame.
 pub(crate) fn take_request(hwnd: HWND, request: &FrameRequest) -> bool {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-tests"))]
     crate::fast::native_tests::before_frame_request(hwnd);
-    #[cfg(not(test))]
+    #[cfg(not(all(test, feature = "native-tests")))]
     let _ = hwnd;
     request.take()
 }
@@ -146,14 +146,14 @@ pub(crate) fn on_input(
     mut callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>,
 ) {
     let request = window.state.fast_frame_request.clone();
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-tests"))]
     let hwnd = gpui::PlatformWindow::get_raw_handle(window).0 as usize;
     window
         .state
         .callbacks
         .input
         .set(Some(Box::new(move |event| {
-            #[cfg(test)]
+            #[cfg(all(test, feature = "native-tests"))]
             crate::fast::native_tests::input(hwnd);
             let result = callback(event);
             request.request();

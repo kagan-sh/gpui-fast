@@ -504,7 +504,7 @@ impl WindowsPlatform {
                             RedrawWindow(Some(hwnd.as_raw()), None, None, RDW_INVALIDATE)
                                 .ok()
                                 .log_err();
-                            #[cfg(test)]
+                            #[cfg(all(test, feature = "native-tests"))]
                             crate::fast::native_tests::paint_invalidated(hwnd.as_raw());
                         }
                     }
@@ -1692,7 +1692,7 @@ fn check_device_lost(device: &ID3D11Device) -> bool {
     match device_state {
         Ok(_) => false,
         Err(err) => {
-            #[cfg(test)]
+            #[cfg(all(test, feature = "native-tests"))]
             crate::fast::native_tests::device_removed(err.code().0);
             log::error!("DirectX device lost detected: {:?}", err);
             true
@@ -1750,7 +1750,7 @@ fn handle_gpu_device_lost(
     all_windows: &std::sync::Weak<RwLock<SmallVec<[TrackedWindow; 4]>>>,
     text_system: &std::sync::Weak<DirectWriteTextSystem>,
 ) -> Result<()> {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-tests"))]
     crate::fast::native_tests::recovery_started();
     // Here we wait a bit to ensure the system has time to recover from the device lost state.
     // If we don't wait, the final drawing result will be blank.
@@ -1776,7 +1776,7 @@ fn handle_gpu_device_lost(
     }
     if let Some(all_windows) = all_windows.upgrade() {
         for window in all_windows.read().iter() {
-            #[cfg(test)]
+            #[cfg(all(test, feature = "native-tests"))]
             crate::fast::native_tests::recovery_locked();
             unsafe {
                 SendMessageW(
@@ -1799,7 +1799,7 @@ fn handle_gpu_device_lost(
             }
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "native-tests"))]
     crate::fast::native_tests::recovery_finished();
     Ok(())
 }
@@ -1869,6 +1869,23 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .to_owned()
 }
 
+// The window procedure cannot unwind. A panic that leaves it aborts the process.
+fn relay_window_message(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    handle: impl FnOnce() -> LRESULT,
+) -> LRESULT {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(handle)) {
+        Ok(result) => result,
+        Err(payload) => {
+            log::error!("window procedure panicked: {}", panic_message(&payload));
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+    }
+}
+
 unsafe extern "system" fn window_procedure(
     hwnd: HWND,
     msg: u32,
@@ -1913,17 +1930,9 @@ unsafe extern "system" fn window_procedure(
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     };
     let _depth = WndProcDepth::enter(&inner);
-    // This procedure cannot unwind. A panic here aborts the process, which is
-    // what opening a Browser page did after a nested DirectX or WebView2 pump.
-    let inner = std::panic::AssertUnwindSafe(inner);
-    let result = match std::panic::catch_unwind(|| { inner }.handle_msg(hwnd, msg, wparam, lparam))
-    {
-        Ok(result) => result,
-        Err(payload) => {
-            log::error!("window procedure panicked: {}", panic_message(&payload));
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-        }
-    };
+    let result = relay_window_message(hwnd, msg, wparam, lparam, || {
+        inner.handle_msg(hwnd, msg, wparam, lparam)
+    });
 
     if msg == WM_NCDESTROY {
         unsafe { set_window_long(hwnd, GWLP_USERDATA, 0) };
@@ -1971,13 +1980,33 @@ mod tests {
 
     use crate::{read_from_clipboard, write_to_clipboard};
     use gpui::ClipboardItem;
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
     use windows::Win32::Security::Credentials::{
         CRED_PERSIST_SESSION, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredFree, CredReadW,
         CredWriteW,
     };
+    use windows::Win32::UI::WindowsAndMessaging::DefWindowProcW;
     use windows::core::{PCWSTR, PWSTR};
 
-    use super::{encode_restart_arguments, username_and_password};
+    use super::{
+        encode_restart_arguments, panic_message, relay_window_message, username_and_password,
+    };
+
+    #[test]
+    fn window_procedure_returns_after_a_panic() {
+        let text = std::panic::catch_unwind(|| panic!("lost the device")).unwrap_err();
+        assert_eq!(panic_message(text.as_ref()), "lost the device");
+        let owned =
+            std::panic::catch_unwind(|| panic!("{}", "lost the device".to_string())).unwrap_err();
+        assert_eq!(panic_message(owned.as_ref()), "lost the device");
+
+        let hwnd = HWND::default();
+        let expected = unsafe { DefWindowProcW(hwnd, 0, WPARAM(0), LPARAM(0)) };
+        let result = relay_window_message(hwnd, 0, WPARAM(0), LPARAM(0), || {
+            panic!("lost the device");
+        });
+        assert_eq!(result, expected);
+    }
 
     #[test]
     fn test_read_credential_with_username() {

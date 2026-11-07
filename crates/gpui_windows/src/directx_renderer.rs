@@ -255,7 +255,7 @@ impl DirectXRenderer {
                 .swap_chain
                 .Present(0, DXGI_PRESENT(0))
         };
-        #[cfg(test)]
+        #[cfg(all(test, feature = "native-tests"))]
         crate::fast::native_tests::present(self.hwnd, self.direct_composition.is_some(), result.0);
         result.ok().context("Presenting swap chain failed")
     }

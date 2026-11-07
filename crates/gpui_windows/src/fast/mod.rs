@@ -15,6 +15,6 @@ pub(crate) mod frame;
 pub(crate) mod frame_schedule;
 pub(crate) mod globals;
 pub(crate) mod layers;
-#[cfg(test)]
+#[cfg(all(test, feature = "native-tests"))]
 pub(crate) mod native_tests;
 pub(crate) mod rounded_clip;

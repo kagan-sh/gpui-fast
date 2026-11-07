@@ -1,4 +1,4 @@
-//! Opt-in native Windows regression checks. Run one case per process on an interactive desktop.
+//! Opt-in native Windows regression checks (`--features native-tests`). Run one case per process on an interactive desktop.
 //! Select `GPUI_NATIVE_CASE=paint_race`, `input_restore`, or `recovery`, and
 //! `GPUI_NATIVE_DCOMP=1` or `0`. Recovery additionally requires explicit reset opt-in.
 
