@@ -1802,7 +1802,7 @@ pub enum HoverListenerMode {
 }
 
 impl HoverListenerMode {
-    fn is_hovered(self, hitbox: &Hitbox, window: &Window) -> bool {
+    pub(crate) fn is_hovered(self, hitbox: &Hitbox, window: &Window) -> bool {
         match self {
             Self::InputModalityAware => hitbox.is_hovered(window),
             Self::InputModalityIndependent => hitbox.id.is_hovered_ignoring_last_input(window),
@@ -2461,8 +2461,7 @@ impl Interactivity {
                     }
                 }
 
-                let opacity = crate::fast::retained::push_element_opacity(window, style.opacity);
-                let result = window.with_text_style(style.text_style().cloned(), |window| {
+                window.with_text_style(style.text_style().cloned(), |window| {
                     window.with_content_mask(
                         style.overflow_mask(bounds, window.rem_size()),
                         |window| {
@@ -2474,13 +2473,13 @@ impl Interactivity {
 
                             let scroll_offset =
                                 self.clamp_scroll_position(bounds, &style, window, cx);
-                            let result = f(&style, scroll_offset, hitbox, window, cx);
+                            let result = window.with_element_opacity(style.opacity, |window| {
+                                f(&style, scroll_offset, hitbox, window, cx)
+                            });
                             (result, element_state)
                         },
                     )
-                });
-                crate::fast::retained::pop_element_opacity(window, opacity);
-                result
+                })
             },
         )
     }
@@ -2531,7 +2530,7 @@ impl Interactivity {
                 .tracked_scroll_handle
                 .as_ref()
                 .map(|handle| handle.0.borrow_mut());
-            if let Some(mut scroll_handle_state) = tracked_scroll_handle.as_deref_mut() {
+            if let Some(scroll_handle_state) = tracked_scroll_handle.as_deref_mut() {
                 scroll_handle_state.overflow = style.overflow;
                 scroll_to_bottom = mem::take(&mut scroll_handle_state.scroll_to_bottom);
             }
@@ -3236,7 +3235,14 @@ impl Interactivity {
                     .pending_mouse_down
                     .get_or_insert_with(Default::default)
                     .clone();
-                let hover_listener = Rc::new(hover_listener);
+                let hover_listener = crate::fast::layers::hover_freeze::track_listener(
+                    window,
+                    &was_hovered,
+                    &has_mouse_down,
+                    hover_listener,
+                    hitbox,
+                    self.hover_listener_mode,
+                );
                 let hover_listener_state = was_hovered.clone();
                 let update_hover = move |is_hovered: bool, window: &mut Window, cx: &mut App| {
                     let mut was_hovered = hover_listener_state.borrow_mut();
@@ -3248,7 +3254,9 @@ impl Interactivity {
                 };
                 let hover_listener_mode = self.hover_listener_mode;
 
-                if has_mouse_down.borrow().is_none() {
+                if has_mouse_down.borrow().is_none()
+                    && !crate::fast::layers::hover_freeze::holds_listeners(window)
+                {
                     let is_hovered =
                         !cx.has_active_drag() && hover_listener_mode.is_hovered(hitbox, window);
                     if is_hovered != *was_hovered.borrow() {
@@ -3433,6 +3441,8 @@ impl Interactivity {
             let allow_concurrent_scroll = style.allow_concurrent_scroll;
             let restrict_scroll_to_axis = style.restrict_scroll_to_axis;
             let line_height = window.line_height();
+            let fast_scroll_max =
+                crate::fast::layers::wheel::scroll_max(self, hitbox.bounds, style, window);
             let hitbox = hitbox.clone();
             let current_view = window.current_view();
             let subtrees = crate::fast::retained::enclosing_retained_subtrees(window);
@@ -3476,6 +3486,13 @@ impl Interactivity {
                         } else {
                             delta_x = Pixels::ZERO;
                         }
+                    }
+                    if !crate::fast::layers::wheel::moves(
+                        old_scroll_offset,
+                        point(delta_x, delta_y),
+                        fast_scroll_max,
+                    ) {
+                        return;
                     }
                     scroll_offset.y += delta_y;
                     scroll_offset.x += delta_x;
@@ -4509,7 +4526,7 @@ impl ScrollHandle {
     /// Set the offset explicitly. The offset is the distance from the top left of the
     /// parent container to the top left of the first child.
     /// As you scroll further down the offset becomes more negative.
-    pub fn set_offset(&self, mut position: Point<Pixels>) {
+    pub fn set_offset(&self, position: Point<Pixels>) {
         let state = self.0.borrow();
         crate::fast::layers::invalidate::offset_set(
             &state.version,
@@ -5198,7 +5215,7 @@ mod tests {
     fn tooltip_respects_custom_show_delay() {
         let extra_delay = Duration::from_secs(1);
         let show_delay_override = DEFAULT_TOOLTIP_SHOW_DELAY + extra_delay;
-        let (mut test_app, _any_window, captured_active_tooltip) =
+        let (test_app, _any_window, captured_active_tooltip) =
             setup_tooltip_owner_test(Some(show_delay_override));
 
         let weak_active_tooltip = captured_active_tooltip.borrow().clone().unwrap();

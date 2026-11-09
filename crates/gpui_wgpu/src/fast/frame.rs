@@ -71,6 +71,7 @@ pub(crate) struct FrameState {
 /// The GPU objects a frame is recorded with, borrowed from whoever owns them:
 /// the on-screen renderer, or the pixel tests' surfaceless harness.
 pub(crate) struct FrameTarget<'a> {
+    pub(crate) dynamic_textures: &'a crate::fast::dynamic_textures::TextureStore,
     pub(crate) device: &'a wgpu::Device,
     pub(crate) queue: &'a wgpu::Queue,
     pub(crate) pipelines: &'a WgpuPipelines,
@@ -139,6 +140,7 @@ impl FrameHost for WgpuRendererCore {
             InstanceData::Texture { view, .. } => InstanceSource::Texture(view),
         };
         Ok(FrameTarget {
+            dynamic_textures: &self.fast_dynamic_textures,
             device: &resources.device,
             queue: &resources.queue,
             pipelines: &resources.pipelines,
@@ -943,7 +945,7 @@ pub(crate) fn draw_scene(
                 }
             }
             PrimitiveBatch::PolychromeSprites { texture_id, range } => {
-                let Some(texture) = atlas_bind_group(target.atlas, &texture_bind_group, texture_id)
+                let Some(texture) = polychrome_bind_group(target, &texture_bind_group, texture_id)
                 else {
                     continue;
                 };
@@ -978,6 +980,21 @@ fn atlas_bind_group(
         "atlas_texture_bind_group",
         &texture_info.view,
     ))
+}
+
+/// The bind group of a polychrome batch's texture: a dynamic texture's own,
+/// or the atlas texture's. A dynamic texture the frame's device does not hold
+/// is skipped like a released atlas texture, never looked up in the atlas.
+fn polychrome_bind_group(
+    target: &FrameTarget,
+    texture_bind_group: &impl Fn(&str, &wgpu::TextureView) -> wgpu::BindGroup,
+    texture_id: AtlasTextureId,
+) -> Option<wgpu::BindGroup> {
+    if let Some(id) = gpui::DynamicTextureId::from_atlas_texture_id(texture_id) {
+        let view = target.dynamic_textures.view(id)?;
+        return Some(texture_bind_group("dynamic_texture_bind_group", &view));
+    }
+    atlas_bind_group(target.atlas, texture_bind_group, texture_id)
 }
 
 /// Begins a pass that draws into `view`, cleared to `clear` if one is given.
@@ -1030,6 +1047,17 @@ fn draw_batch(
     );
 }
 
+/// What a path rasterization pass keeps of its target. Multisampled paths are
+/// read only through their resolve, so storing the samples would write the
+/// multisampled texture, several times the window's size, for nothing.
+fn path_store_op(resolve_target: Option<&wgpu::TextureView>) -> wgpu::StoreOp {
+    if resolve_target.is_some() {
+        wgpu::StoreOp::Discard
+    } else {
+        wgpu::StoreOp::Store
+    }
+}
+
 /// Rasterizes a group's range of the frame's path vertices into the cleared
 /// intermediate texture, in a pass of its own, as upstream's
 /// `draw_paths_to_intermediate` does for a batch. Returns false if there is
@@ -1058,7 +1086,7 @@ fn rasterize_group(
             resolve_target,
             ops: wgpu::Operations {
                 load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
+                store: path_store_op(resolve_target),
             },
             depth_slice: None,
         })],
@@ -1079,3 +1107,6 @@ fn rasterize_group(
     );
     true
 }
+
+#[cfg(all(test, feature = "test-support", not(target_family = "wasm")))]
+mod tests;

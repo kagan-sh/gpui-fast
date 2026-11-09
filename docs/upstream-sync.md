@@ -55,6 +55,29 @@ only hold the hooks that call into it.
    switch retained mode is compiled only under `test-support`, and exported
    from `gpui.rs` one item at a time:
    `#[cfg(any(test, feature = "test-support"))] pub use fast::stats::LayoutStats;`.
+
+   The one deliberate exception is `fast::dynamic_textures` (longbridge/gpui-fast#86):
+   content that changes every frame — video, remote desktop — needs an app-visible
+   mutable texture, and upstream offers nothing of the kind; without one, each
+   frame reallocates atlas tiles and invalidates the glyphs sharing them. The
+   surface stays at the minimum that makes the feature usable: the opaque
+   `DynamicTexture` handle and `DynamicTextureId`, the `DynamicTexturePlatform`
+   trait and its installer (the seam the platform crates implement), five
+   `Window` methods, and `DynamicTexture::new_gpu`, `id` and `remove` for
+   renderer crates. The wgpu crate adds an
+   owning GPU texture type and its context constructor under the same
+   `fast::dynamic_textures` exception. Everything else is `pub(crate)`, and the
+   module adds no rendering behavior an app could observe without calling the
+   new methods.
+   A second exception is `WebPlatform::wgpu_context()` (in
+   `gpui_web::fast::wgpu_context`, longbridge/gpui-fast#102): a browser page has
+   no window composition, so a wgpu-rendered element there can only reach the
+   screen by drawing during `paint` into a `WgpuDynamicTexture` allocated from
+   the context that draws the window. `WebPlatform` kept that context private,
+   which left the feature unreachable to an application that does not replace
+   the platform.
+   The addition is one accessor returning a clone of the `Rc` it already
+   holds, and nothing else about the web platform becomes public.
 6. **New files only inside `fast/`, or in our own crates** such as
    `crates/gpui_perf` (benchmarks, examples and the frame-measuring app) and
    `compat/` (the `gpui-pre-*` stand-ins GPUI Kit applications patch in).
@@ -162,7 +185,11 @@ for `gpui_macos`, `WgpuRenderer` gains `new_sharing_atlas` and
   upstream merges its version, the sync replaces ours with it. Two things
   behave differently from the pull request: a retained view drawn again from
   last frame keeps the surface switches it made, and `with_composition_surface`
-  inside a scroll layer paints where the layer does. On X11, when a
+  inside a scroll layer paints where the layer does. A window that composes
+  but holds no surface beyond the base and overlay surfaces presents with
+  `PlatformWindow::draw` and gives the platform only its base surface, so the
+  overlay's view, layer and textures are released until a surface is added.
+  On X11, when a
   compositing manager blends ARGB windows, the GPUI content above native
   surfaces is drawn into a transparent override-redirect window over the
   window instead of being cut out of them, so shadows and translucent
@@ -184,6 +211,37 @@ their platform event loop. Capture runs first, press ownership survives through
 release, and leave is sent when the pointer changes recipients. Prepaint scopes
 and retained context keep input ownership with the same surface as its paint.
 No application-specific timeline policy belongs here.
+
+- Dynamic textures (longbridge/gpui-fast#86), ours to change until upstream
+  takes them:
+  `gpui` exports `DynamicTexture`, `DynamicTextureId`,
+  `DynamicTexturePlatform`, `set_dynamic_texture_platform` and `Window`
+  gains `create_dynamic_texture`, `update_dynamic_texture`,
+  `paint_dynamic_texture` and `remove_dynamic_texture`. Streaming content —
+  video, remote desktop — changes every frame, and upstream's only path for
+  pixels is the atlas, where each frame's upload reallocates tiles and
+  invalidates the glyphs sharing them. The handle keeps its fields private and
+  the id only exposes the atlas-index mapping the renderer crates need to
+  resolve a sprite; the trait and its installer exist so the platform crates
+  can register their backends, and everything else in
+  `fast::dynamic_textures` is `pub(crate)`; without calling the new methods,
+  an app observes no difference in what GPUI draws.
+
+  Content rendered on the window renderer's device can use
+  `WgpuContext::create_dynamic_texture` instead of an intermediate image.
+  Its `WgpuDynamicTexture` owner provides `render` and `paint`: the producer
+  submits on the shared queue, then the ordinary sprite pipeline samples
+  that same texture, with no upload or transfer copy. A successful write
+  refreshes the window and advances the content version for retained views
+  and scroll-layer tiles.
+
+  Each context owns its texture lookup table; clones share it, while a new
+  device starts with an empty table. The owning handle removes its entry
+  and retires its core metadata on drop. GPU objects never enter the global
+  upload platform, so this ownership works on browser WebGPU and WebGL as
+  well as native wgpu. The existing Metal upload backend and its installer
+  are unchanged; CPU updates refuse GPU-written metadata. A native Metal
+  producer interface is outside this extension.
 
 When the check fails, move the change into a `fast/` module and leave a hook
 behind that names it; use `git diff <import_commit> -- <file>` to see what
@@ -217,8 +275,19 @@ commit our copy was taken from is `zed_commit` in `UPSTREAM`, and
 4. Update `zed_commit` and `import_commit` in `UPSTREAM` to the new zed commit
    and the new vendor commit, and add or remove entries under `tracked` if zed
    added or removed crates we use.
-5. Run `script/check-upstream`, the tests and clippy.
-6. Check that `window/a11y.rs` still keeps the tree it last sent in
+5. Look at whether upstream changed how an index under the pointer is found:
+   `TextLayout::index_for_position`'s steps from line to line (with
+   `WrappedLineLayout::size` and `WrappedLine::len`),
+   `WrappedLineLayout::_index_for_position` and `LineLayout::index_for_x`
+   (`git diff <old vendor commit> <new vendor commit> --
+   crates/gpui/src/elements/text.rs crates/gpui/src/text_system/line.rs
+   crates/gpui/src/text_system/line_layout.rs`). `fast/interactive_text.rs`
+   follows those steps to lay hitboxes over where an `InteractiveText` shows
+   the hand, while its clicks still go through upstream's code; port the
+   change into it, or the hand and the clicks part. Nothing conflicts there
+   either.
+6. Run `script/check-upstream`, the tests and clippy.
+7. Check that `window/a11y.rs` still keeps the tree it last sent in
    `A11yDebug::last_tree_update` in every build: `fast/a11y.rs` reads the
    nodes it draws again from there
    (`a11y_frame_keeps_the_tree_it_sent` fails if it stops).

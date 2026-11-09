@@ -80,6 +80,11 @@ frames drawn with accessibility active, set `GPUI_A11Y_ACTIVE=1` (honored
 with the `test-support` feature): every window then builds its tree as
 though assistive technology had asked for it.
 
+A synthetic builder can rewrite its parent's children through `parent_node()` to describe a nested hierarchy.
+The log records whether that list differs from the children appended by the builder. Replaying such a node keeps
+its finished hierarchy, including when a scroll layer captures it: replaying each synthetic leaf as a direct child
+would give nested nodes two parents. Builders that only append leaves retain the ordinary splice behavior.
+
 A notified view marks the views around it dirty, because they have to be
 walked to reach it. A view that is dirty only for that reason — it was not
 notified, nothing it read itself changed and it is hovered as it was — is not
@@ -189,7 +194,11 @@ from being retained. Notify or write only when the value changes.
 
 To rule retention in or out when something looks stale, run with
 `GPUI_VIEW_RETENTION=0`: every view is then drawn from scratch each frame, as
-upstream does.
+upstream does. It does not bring back one notification upstream sends: an
+`InteractiveText` notifies its view as the pointer crosses its characters only
+when it has a hover listener, its hand being shown by hitboxes over its
+clickable ranges (`fast/interactive_text.rs`), where upstream notifies the
+view for every one.
 
 ## How it is verified
 

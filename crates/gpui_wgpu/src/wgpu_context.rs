@@ -1,4 +1,6 @@
 #[cfg(not(target_family = "wasm"))]
+use crate::{WgpuRenderer, WgpuSurfaceConfig};
+#[cfg(not(target_family = "wasm"))]
 use anyhow::Context as _;
 #[cfg(not(target_family = "wasm"))]
 use gpui_util::ResultExt;
@@ -9,6 +11,7 @@ use wgpu::TextureFormat;
 
 #[derive(Clone)]
 pub struct WgpuContext {
+    pub(crate) fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore,
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,
@@ -131,24 +134,27 @@ impl WgpuContext {
     pub fn new(
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
+        config: &WgpuSurfaceConfig,
         compositor_gpu: Option<CompositorGpuHint>,
     ) -> anyhow::Result<Self> {
-        Self::new_with_options(instance, surface, compositor_gpu, false)
+        Self::new_with_options(instance, surface, config, compositor_gpu, false)
     }
 
     #[cfg(not(target_family = "wasm"))]
     pub fn new_rejecting_software(
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
+        config: &WgpuSurfaceConfig,
         compositor_gpu: Option<CompositorGpuHint>,
     ) -> anyhow::Result<Self> {
-        Self::new_with_options(instance, surface, compositor_gpu, true)
+        Self::new_with_options(instance, surface, config, compositor_gpu, true)
     }
 
     #[cfg(not(target_family = "wasm"))]
     fn new_with_options(
         instance: wgpu::Instance,
         surface: &wgpu::Surface<'_>,
+        config: &WgpuSurfaceConfig,
         compositor_gpu: Option<CompositorGpuHint>,
         reject_software: bool,
     ) -> anyhow::Result<Self> {
@@ -161,6 +167,7 @@ impl WgpuContext {
                 &instance,
                 device_id_filter,
                 surface,
+                config,
                 compositor_gpu.as_ref(),
                 reject_software,
             ))?;
@@ -201,7 +208,7 @@ impl WgpuContext {
         not(target_family = "wasm"),
         any(test, feature = "bench-support", feature = "test-support")
     ))]
-    fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
+    pub(crate) fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
         let instance = crate::fast::rounded_clip::headless_instance();
         let device_id_filter = Self::device_id_filter();
         let (adapter, device, queue, dual_source_blending, color_texture_format, target_format) =
@@ -313,6 +320,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             errors,
+            fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::default(),
         }
     }
 
@@ -412,6 +420,7 @@ impl WgpuContext {
             dual_source_blending,
             color_texture_format,
             errors,
+            fast_dynamic_textures: crate::fast::dynamic_textures::TextureStore::default(),
         };
         Ok(PreparedWebGraphics { context, surface })
     }
@@ -506,6 +515,7 @@ impl WgpuContext {
         instance: &wgpu::Instance,
         device_id_filter: Option<u32>,
         surface: &wgpu::Surface<'_>,
+        config: &WgpuSurfaceConfig,
         compositor_gpu: Option<&CompositorGpuHint>,
         reject_software: bool,
     ) -> anyhow::Result<(
@@ -556,7 +566,7 @@ impl WgpuContext {
 
             log::info!("Testing adapter: {} ({:?})...", info.name, info.backend);
 
-            match Self::try_adapter_with_surface(&adapter, surface).await {
+            match Self::try_adapter_with_surface(&adapter, surface, config).await {
                 Ok((device, queue, dual_source_blending, color_atlas_texture_format)) => {
                     log::info!(
                         "Selected GPU (passed configuration test): {} ({:?})",
@@ -644,6 +654,7 @@ impl WgpuContext {
     async fn try_adapter_with_surface(
         adapter: &wgpu::Adapter,
         surface: &wgpu::Surface<'_>,
+        config: &WgpuSurfaceConfig,
     ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
         let caps = surface.get_capabilities(adapter);
         if caps.formats.is_empty() {
@@ -655,21 +666,13 @@ impl WgpuContext {
 
         let (device, queue, dual_source_blending, color_atlas_texture_format) =
             Self::create_device(adapter).await?;
+        // Test with the configuration the renderer will use, so that it doesn't need to
+        // configure the surface a second time.
+        let (surface_config, _, _) =
+            WgpuRenderer::surface_configuration(surface, adapter, &device, config)?;
         let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
-        let test_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: caps.formats[0],
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            width: 64,
-            height: 64,
-            present_mode: wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
-            view_formats: vec![],
-        };
-
-        surface.configure(&device, &test_config);
+        surface.configure(&device, &surface_config);
 
         let error = error_scope.pop().await;
         if let Some(e) = error {

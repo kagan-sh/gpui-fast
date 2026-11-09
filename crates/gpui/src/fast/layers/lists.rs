@@ -1037,7 +1037,7 @@ fn keep_reads(window: &mut Window, cx: &mut App, id: &GlobalElementId) {
     // What the rows read, and the views drawn in them, told apart from what
     // the list does: the rows keep it themselves.
     let start = reads_len();
-    cx.entities.extend_accessed(record.views.iter());
+    cx.entities.extend_accessed_recorded(record.views.iter());
     for row in window.fast_layers.layers[id].rows.rows.values() {
         cx.replay_dependencies(&row.dependencies);
     }
@@ -2027,10 +2027,13 @@ pub(crate) fn end_list(
     state: &crate::StateInner,
     render_item: &mut crate::RenderItemFn,
     bounds: Bounds<Pixels>,
+    padding: crate::Edges<Pixels>,
 ) {
     if !LIST_LAYERS {
         return;
     }
+    // Rows are laid out within the list's horizontal content insets.
+    let item_width = bounds.size.width - padding.left - padding.right;
     let list = Some(state.version.id());
     let id = match window.fast_layers.painting.as_ref() {
         Some(painting) => painting.id.clone(),
@@ -2130,7 +2133,7 @@ pub(crate) fn end_list(
     };
     let (top, bottom) = (viewport.top() - extent, viewport.bottom() + extent);
     let available = crate::size(
-        AvailableSpace::Definite(bounds.size.width),
+        AvailableSpace::Definite(item_width),
         AvailableSpace::MinContent,
     );
     let mut rendered: FxHashMap<usize, AnyElement> = FxHashMap::default();
@@ -2284,7 +2287,7 @@ pub(crate) fn end_list(
     let plan = plan(&unrendered, needed.clone());
     let slot = |(top, height): (Pixels, Pixels)| Bounds {
         origin: point(anchor_origin.x, top),
-        size: crate::size(bounds.size.width, height),
+        size: crate::size(item_width, height),
     };
     frame.slots = plan
         .render

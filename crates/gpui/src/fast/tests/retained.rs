@@ -2676,3 +2676,289 @@ fn an_element_no_longer_drawn_leaves_the_debug_bounds_of_a_retained_frame() {
     );
     assert_eq!(bounds(&mut cx, "kept"), Some(kept));
 }
+
+/// A view of a fixed size that reads a model which is replaced from time to
+/// time, as a page's keyed state is when the page is left and shown again.
+struct ReplacedModel {
+    model: Rc<std::cell::RefCell<Entity<Model>>>,
+    builds: Rc<Cell<usize>>,
+}
+
+impl Render for ReplacedModel {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.builds.set(self.builds.get() + 1);
+        let _ = self.model.borrow().read(cx);
+        div().relative().w(px(100.)).h(px(40.))
+    }
+}
+
+/// The most entities a record of the last frame replays when it is reused.
+fn most_replayed_entities(cx: &mut TestAppContext, window: WindowHandle<Shell>) -> usize {
+    cx.update_window(window.into(), |_, window, _| {
+        window
+            .rendered_frame
+            .retained
+            .records
+            .iter()
+            .map(|record| record.dependencies.entities.len())
+            .max()
+            .unwrap_or(0)
+    })
+    .unwrap()
+}
+
+/// A view that is only ever spliced, as a window's root is while only a page
+/// in it changes, keeps of what the views in it read only what still exists.
+/// Its dependencies are last frame's joined with its gaps', so otherwise it
+/// keeps every entity they ever read, and replays them on every frame.
+#[test]
+fn a_spliced_view_forgets_the_entities_views_in_it_dropped() {
+    let mut cx = TestAppContext::single();
+    let builds = Rc::new(Cell::new(0));
+    let model = Rc::new(std::cell::RefCell::new(cx.new(|_| Model(0))));
+    let page = cx.new({
+        let (model, builds) = (model.clone(), builds.clone());
+        move |_| ReplacedModel { model, builds }
+    });
+    let (window, shell_builds) = shell(&mut cx, {
+        let page = page.clone();
+        move |_| page.into()
+    });
+    draw_shell(&mut cx, window);
+    let first = most_replayed_entities(&mut cx, window);
+    for frame in 0..20 {
+        *model.borrow_mut() = cx.new(|_| Model(frame));
+        cx.update(|cx| cx.notify(page.entity_id()));
+        draw_shell(&mut cx, window);
+        let replayed = most_replayed_entities(&mut cx, window);
+        assert!(
+            replayed <= first + 1,
+            "frame {frame}: {replayed} entities replayed, from {first}"
+        );
+    }
+    assert_eq!(shell_builds.get(), 1, "the shell was spliced throughout");
+    assert_eq!(builds.get(), 21);
+}
+
+struct Swatch {
+    red: bool,
+    builds: Rc<Cell<usize>>,
+}
+
+impl Render for Swatch {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.builds.set(self.builds.get() + 1);
+        div()
+            .size_full()
+            .bg(if self.red {
+                crate::red()
+            } else {
+                crate::blue()
+            })
+            .child(format!("cell {}", self.red))
+    }
+}
+
+struct Panel {
+    cells: [Entity<Swatch>; 2],
+    /// Drawn without `.cached`.
+    plain: Entity<Swatch>,
+    builds: Rc<Cell<usize>>,
+}
+
+impl Render for Panel {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.builds.set(self.builds.get() + 1);
+        div()
+            .size_full()
+            .flex()
+            .gap(px(4.))
+            .bg(crate::white())
+            .children(self.cells.iter().map(|cell| {
+                cell.clone()
+                    .cached(StyleRefinement::default().w(px(50.)).h(px(20.)))
+            }))
+            .child(div().w(px(50.)).h(px(20.)).child(self.plain.clone()))
+    }
+}
+
+/// A cached view around the panel, so that cached views nest two deep.
+struct Bezel {
+    panel: Entity<Panel>,
+    builds: Rc<Cell<usize>>,
+}
+
+impl Render for Bezel {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        self.builds.set(self.builds.get() + 1);
+        div().size_full().p(px(2.)).child(
+            self.panel
+                .clone()
+                .cached(StyleRefinement::default().w(px(196.)).h(px(36.))),
+        )
+    }
+}
+
+struct Screen {
+    shell: Entity<Bezel>,
+}
+
+impl Render for Screen {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(300.)).child(
+            self.shell
+                .clone()
+                .cached(StyleRefinement::default().w(px(200.)).h(px(40.))),
+        )
+    }
+}
+
+/// A screen of cached views nested in cached views, and how often each was
+/// built.
+struct Nested {
+    window: WindowHandle<Screen>,
+    panel: Entity<Panel>,
+    cells: [Entity<Swatch>; 2],
+    plain: Entity<Swatch>,
+    /// The shell's, the panel's, the cells' and the plain cell's builds.
+    builds: [Rc<Cell<usize>>; 5],
+    // Last, so that the handles above are dropped before the app checks for leaks.
+    cx: TestAppContext,
+}
+
+impl Nested {
+    fn new() -> Self {
+        let mut cx = TestAppContext::single();
+        let builds: [Rc<Cell<usize>>; 5] = Default::default();
+        let window = cx.add_window({
+            let builds = builds.clone();
+            move |_, cx| {
+                let [shell, panel, first, second, plain] = builds;
+                let mut swatch = |builds| cx.new(|_| Swatch { red: false, builds });
+                let cells = [swatch(first), swatch(second)];
+                let plain = swatch(plain);
+                let panel = cx.new(|_| Panel {
+                    cells,
+                    plain,
+                    builds: panel,
+                });
+                Screen {
+                    shell: cx.new(|_| Bezel {
+                        panel,
+                        builds: shell,
+                    }),
+                }
+            }
+        });
+        let (panel, cells, plain) = window
+            .update(&mut cx, |screen, _, cx| {
+                let shell = screen.shell.clone();
+                let panel = shell.read(cx).panel.clone();
+                let panel_state = panel.read(cx);
+                let (cells, plain) = (panel_state.cells.clone(), panel_state.plain.clone());
+                (panel, cells, plain)
+            })
+            .unwrap();
+        let mut nested = Self {
+            window,
+            panel,
+            cells,
+            plain,
+            builds,
+            cx,
+        };
+        nested.draw();
+        nested
+    }
+
+    fn draw(&mut self) -> Vec<String> {
+        self.cx
+            .update_window(self.window.into(), |_, window, cx| {
+                window.draw(cx).clear(cx);
+                window.describe_rendered_frame()
+            })
+            .unwrap()
+    }
+
+    fn builds(&self) -> [usize; 5] {
+        self.builds.each_ref().map(|builds| builds.get())
+    }
+
+    fn paint(&mut self, swatch: &Entity<Swatch>, red: bool) {
+        swatch.update(&mut self.cx, |swatch, cx| {
+            swatch.red = red;
+            cx.notify();
+        });
+    }
+
+    /// Draws a full redraw and checks it against `spliced`.
+    fn assert_full_redraw_draws(&mut self, spliced: &[String]) {
+        self.cx
+            .update_window(self.window.into(), |_, window, _| window.refresh())
+            .unwrap();
+        assert_eq!(
+            self.draw(),
+            spliced,
+            "the spliced frame is what a full redraw draws"
+        );
+    }
+}
+
+/// Cached views dirty only because a cached view nested in them was notified
+/// are drawn from last frame around it: the notified view alone is built
+/// again, for one splice and for several in a row, and the frame is the one
+/// a full redraw would draw.
+#[test]
+fn a_cached_view_is_drawn_around_a_notified_cached_view_in_it() {
+    let mut nested = Nested::new();
+    let first = nested.cells[0].clone();
+    for run in [&[true][..], &[false, true, false]] {
+        let mut spliced = Vec::new();
+        for &red in run {
+            let before = nested.builds();
+            nested.paint(&first, red);
+            spliced = nested.draw();
+            let mut expected = before;
+            expected[2] += 1;
+            assert_eq!(
+                nested.builds(),
+                expected,
+                "only the notified cell is built again"
+            );
+        }
+        nested.assert_full_redraw_draws(&spliced);
+    }
+}
+
+/// A cached view is built again when it was notified itself, or when a view
+/// nested in it that is not cached was, and draws what a full redraw draws.
+#[test]
+fn a_cached_view_is_built_again_unless_only_cached_views_in_it_changed() {
+    let mut nested = Nested::new();
+    let (first, plain, panel) = (
+        nested.cells[0].clone(),
+        nested.plain.clone(),
+        nested.panel.clone(),
+    );
+
+    let before = nested.builds();
+    nested.paint(&first, true);
+    panel.update(&mut nested.cx, |_, cx| cx.notify());
+    let drawn = nested.draw();
+    assert_eq!(
+        nested.builds()[..4],
+        [before[0], before[1] + 1, before[2] + 1, before[3]],
+        "the notified panel is built again with the cell, and the cached cell it did not change is not"
+    );
+    nested.assert_full_redraw_draws(&drawn);
+
+    let before = nested.builds();
+    nested.paint(&plain, true);
+    let drawn = nested.draw();
+    assert_eq!(
+        nested.builds()[1],
+        before[1] + 1,
+        "a panel with a notified view in it that is not cached is built again"
+    );
+    nested.assert_full_redraw_draws(&drawn);
+}

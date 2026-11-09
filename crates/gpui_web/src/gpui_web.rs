@@ -16,6 +16,8 @@ mod display;
 #[cfg(target_family = "wasm")]
 mod events;
 #[cfg(any(target_family = "wasm", test))]
+mod fast;
+#[cfg(any(target_family = "wasm", test))]
 mod glyph_cache;
 #[cfg(target_family = "wasm")]
 mod http_client;

@@ -30,12 +30,12 @@ use crate::key_dispatch::{DispatchNodeId, DispatchTree};
 use crate::window::DeferredDraw;
 use crate::window::{PaintIndex, PrepaintStateIndex};
 use crate::{
-    AnyView, App, ContentMask, ElementId, EntityId, FocusId, GlobalElementId, HitboxId, LayoutId,
-    Pixels, Point, StyleRefinement, View, ViewElement, Window,
+    AnyView, App, Bounds, ContentMask, ElementId, EntityId, FocusId, GlobalElementId, HitboxId,
+    LayoutId, Pixels, Point, StyleRefinement, View, ViewElement, Window,
 };
 use collections::FxHashSet;
 use smallvec::SmallVec;
-use std::{mem, ops::Range, rc::Rc};
+use std::{any::TypeId, mem, ops::Range, rc::Rc};
 
 /// The view a [`ViewElement`] renders, kept so that it can be built again on
 /// its own. Empty for a view that is not an entity or an [`AnyView`].
@@ -127,6 +127,9 @@ pub(crate) struct Gap {
     view: ViewElement<AnyView>,
     layout: ViewLayoutState,
     layout_id: LayoutId,
+    /// Where a cached view nested in a cached view is drawn: it is laid out on
+    /// its own, at the bounds it had, not at a node of the view around it.
+    bounds: Option<Bounds<Pixels>>,
     layout_key: u64,
     /// The layout nodes it claimed.
     claimed: Vec<u64>,
@@ -208,6 +211,7 @@ enum GapLayout {
 /// A view drawn from last frame around the nested views built again in it.
 pub(crate) struct Splice {
     previous: usize,
+    entity_updates: u64,
     gaps: Vec<Gap>,
     /// This frame's layout claims, with each rebuilt gap replacing its old
     /// keys and element states. Absent if a gap introduced transient nodes.
@@ -235,6 +239,13 @@ pub(crate) struct SplicedPrepaint {
     /// The records copied along with it, in this frame, each with the
     /// stretch of last frame's range, between gaps, it was copied from.
     copied: Vec<(usize, usize)>,
+}
+
+impl SplicedPrepaint {
+    /// Its record in this frame.
+    pub(crate) fn index(&self) -> usize {
+        self.index
+    }
 }
 
 /// What the window inherits at some point of the element tree, set aside while
@@ -394,7 +405,9 @@ impl Window {
                     .as_slice()
             }),
         );
-        let dependencies = record.dependencies.clone();
+        // Capture before rebuilding gaps; changes made while they render must
+        // still invalidate the ancestor's aggregate on the next frame.
+        let entity_updates = cx.entities.access_log.update_generation();
         let previous_layout = layout.clone();
         let engine = self.layout_engine.as_mut().unwrap();
         let transient_before = engine.transient_count();
@@ -432,7 +445,7 @@ impl Window {
         self.next_frame
             .accessed_element_states
             .extend(element_states.iter().cloned());
-        cx.replay_dependencies(&dependencies);
+        cx.replay_dependencies(&self.rendered_frame.retained.records[previous].dependencies);
         let held = if unchanged {
             Vec::new()
         } else {
@@ -463,9 +476,136 @@ impl Window {
             });
         Some(Splice {
             previous,
+            entity_updates,
             gaps: built,
             layout,
             held,
+        })
+    }
+
+    /// Draws the cached view `id` at `bounds` from last frame around the
+    /// cached views nested in it that have to be built again, if it can be:
+    /// it is dirty only because they are, nothing it read itself changed, it
+    /// is drawn where and as it was, and every dirty view in it is a cached
+    /// view. A cached view is laid out on its own at the bounds its style gave
+    /// it, so building one again where it was leaves the view around it laid
+    /// out as it was, and no layout has to be redone around it.
+    pub(crate) fn splice_cached(
+        &mut self,
+        id: &GlobalElementId,
+        bounds: Bounds<Pixels>,
+        layout: Option<Rc<crate::fast::retained::RetainedLayout>>,
+        cx: &mut App,
+    ) -> Option<Splice> {
+        if self.refreshing
+            || cx.has_active_drag()
+            || crate::fast::a11y::stale(&self.a11y)
+            || self.is_inspector_picking(cx)
+            || self.retained_state.dirty_subtrees.contains(id)
+            || self.next_frame.retained.by_id.contains_key(id)
+            || crate::fast::layers::paint::inside_layer(self)
+        {
+            return None;
+        }
+        let entity = view_entity(id)?;
+        if self.retained_state.notified_entities.contains(&entity) {
+            return None;
+        }
+        let previous = self.rendered_frame.retained.find(id)?;
+        if !self.retained_context_matches(previous, bounds) {
+            return None;
+        }
+        let records = &self.rendered_frame.retained.records;
+        let record = &records[previous];
+        if cx.notified_dependencies_changed(&record.own_dependencies)
+            || crate::fast::layers::invalidate::offset_read_changed(self, &record.own_dependencies)
+            || !self.hovers_unchanged(&record.own_hovers)
+        {
+            return None;
+        }
+
+        let mut gaps = Vec::new();
+        let mut index = previous + 1;
+        while index <= previous + record.nested {
+            let nested = &records[index];
+            if view_entity(&nested.id).is_some_and(|entity| self.dirty_views.contains(&entity)) {
+                if !nested
+                    .rebuild
+                    .as_ref()
+                    .is_some_and(|rebuild| rebuild.is_cached())
+                    || !matches!(nested.paint, PaintStatus::Painted { .. })
+                {
+                    return None;
+                }
+                gaps.push(index);
+            }
+            index += nested.nested + 1;
+        }
+        if gaps.is_empty() {
+            return None;
+        }
+        // As in `splice_layout`: deferred draws outside the gaps could replay
+        // a dirty view.
+        let mut deferred_cursor = record.prepaint_range.start.deferred_draws_index;
+        for &gap in &gaps {
+            let range = &records[gap].prepaint_range;
+            if deferred_cursor != range.start.deferred_draws_index {
+                return None;
+            }
+            deferred_cursor = range.end.deferred_draws_index;
+        }
+        if deferred_cursor != record.prepaint_range.end.deferred_draws_index {
+            return None;
+        }
+
+        let entity_updates = cx.entities.access_log.update_generation();
+        let gaps = gaps
+            .into_iter()
+            .map(|gap| self.cached_gap(gap, cx))
+            .collect::<Option<Vec<_>>>()?;
+        Some(Splice {
+            previous,
+            entity_updates,
+            gaps,
+            layout,
+            held: Vec::new(),
+        })
+    }
+
+    /// The cached view last frame's record `record` stands for, to be built
+    /// again where it was, at the bounds it had.
+    fn cached_gap(&mut self, record: usize, cx: &mut App) -> Option<Gap> {
+        let nested = &self.rendered_frame.retained.records[record];
+        let rebuild = nested.rebuild.clone()?;
+        let previous_layout = nested.layout.clone();
+        let global_id = nested.id.clone();
+        let bounds = nested.context.bounds;
+        let element_id = global_id.ids.last().cloned()?;
+        let layout_id = previous_layout.as_ref()?.root;
+        let layout_key = self.with_parent_layout_key(rebuild.parent_layout_key, |window| {
+            let key = crate::fast::layout_key::push_layout_key(window, Some(&element_id));
+            crate::fast::layout_key::pop_layout_key(window);
+            key
+        });
+        let mut view = ViewElement::new(rebuild.view.clone()).rebuildable(rebuild.view.clone());
+        view.cached_style = rebuild.cached_style.clone();
+        // Nothing is read laying it out, but what it reads from here on is
+        // checked from now.
+        let recording = cx.begin_recording_dependencies();
+        let dependencies = cx.finish_recording_dependencies(recording);
+        let read = dependencies.all.clone();
+        Some(Gap {
+            record,
+            global_id,
+            view,
+            layout: crate::fast::retained::cached_layout_state(previous_layout, dependencies),
+            layout_id,
+            bounds: Some(bounds),
+            layout_key,
+            claimed: Vec::new(),
+            element_states: Vec::new(),
+            dependencies: read,
+            prepainted: None,
         })
     }
 
@@ -544,6 +684,7 @@ impl Window {
                 view,
                 layout,
                 layout_id,
+                bounds: None,
                 layout_key,
                 claimed,
                 element_states,
@@ -614,6 +755,7 @@ impl Window {
             previous,
             mut gaps,
             layout,
+            entity_updates,
             ..
         } = splice;
         let writes_now = cx.entities.write_generation();
@@ -650,7 +792,8 @@ impl Window {
         let mut copied = Vec::new();
         let mut cursor = prepaint_range.start.clone();
         let mut next_record = previous + 1;
-        for (segment, gap) in gaps.iter_mut().enumerate() {
+        for segment in 0..gaps.len() {
+            let gap = &gaps[segment];
             let gap_record = &self.rendered_frame.retained.records[gap.record];
             let gap_range = gap_record.prepaint_range.clone();
             let gap_nested = gap_record.nested;
@@ -659,11 +802,16 @@ impl Window {
             let gap_id = gap_record.id.clone();
 
             let segment_start = self.prepaint_index();
-            self.copy_prepaint_segment(cursor.clone()..gap_range.start.clone(), &mut dispatch);
+            let removed_states = self.copy_prepaint_segment(
+                cursor.clone()..gap_range.start.clone(),
+                &gaps,
+                &mut dispatch,
+            );
             self.copy_records(
                 next_record..gap.record,
                 &cursor,
                 &segment_start,
+                &removed_states,
                 (segment, index),
                 &mut copied,
             );
@@ -681,13 +829,16 @@ impl Window {
             let inherited =
                 self.enter_gap(&gap_id, &rebuild, context.content_mask, context.opacity);
             // What its element's prepaint does, inside the view around it.
-            let bounds = self.layout_bounds(gap.layout_id);
+            let bounds = gap
+                .bounds
+                .unwrap_or_else(|| self.layout_bounds(gap.layout_id));
             self.element_id_stack.push(gap.element_id());
             let node = match copied_node {
                 Some(node) => node,
                 None => self.next_frame.dispatch_tree.push_node(),
             };
             let scope = crate::fast::layout_key::enter_prepaint_scope(self, gap.layout_key);
+            let gap = &mut gaps[segment];
             let prepaint = crate::fast::retained::prepaint_view(
                 &mut gap.view,
                 Some(&gap.global_id),
@@ -709,11 +860,13 @@ impl Window {
         }
         let segment = gaps.len();
         let segment_start = self.prepaint_index();
-        self.copy_prepaint_segment(cursor.clone()..prepaint_range.end, &mut dispatch);
+        let removed_states =
+            self.copy_prepaint_segment(cursor.clone()..prepaint_range.end, &gaps, &mut dispatch);
         self.copy_records(
             next_record..last + 1,
             &cursor,
             &segment_start,
+            &removed_states,
             (segment, index),
             &mut copied,
         );
@@ -733,6 +886,8 @@ impl Window {
         let mut dependencies = self.rendered_frame.retained.records[previous]
             .dependencies
             .written_up_to(writes_now);
+        // Advance only the aggregate; each view keeps its own read checkpoint.
+        dependencies.updates = entity_updates;
         for gap in &gaps {
             let gap_id = &self.rendered_frame.retained.records[gap.record].id;
             if let Some(&gap_index) = target.by_id.get(gap_id) {
@@ -740,6 +895,13 @@ impl Window {
                 layout_keys.extend(gap_record.layout_keys.iter().copied());
                 dependencies = dependencies.union(&gap_record.dependencies);
             }
+        }
+        // The union only grows: a view that is spliced frame after frame would
+        // keep every entity the views in it ever read, and replay them all on
+        // every frame. Those that were released cannot change, so they go.
+        let previous_dependencies = &self.rendered_frame.retained.records[previous].dependencies;
+        if !dependencies.shares_entities_with(previous_dependencies) {
+            dependencies = dependencies.without_released_entities(cx);
         }
         let record = &mut target.records[index];
         record.prepaint_range = start..end;
@@ -761,8 +923,9 @@ impl Window {
     fn copy_prepaint_segment(
         &mut self,
         range: Range<PrepaintStateIndex>,
+        gaps: &[Gap],
         dispatch: &mut OpenDispatchCopy,
-    ) {
+    ) -> Vec<usize> {
         crate::fast::a11y::reuse_prepaint(self, &range);
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
@@ -775,11 +938,10 @@ impl Window {
                 .iter_mut()
                 .map(|request| request.take()),
         );
-        self.next_frame.accessed_element_states.extend(
-            self.rendered_frame.accessed_element_states[range.start.accessed_element_states_index
-                ..range.end.accessed_element_states_index]
-                .iter()
-                .cloned(),
+        let removed_states = copy_splice_state_accesses(
+            self,
+            range.start.accessed_element_states_index..range.end.accessed_element_states_index,
+            gaps,
         );
         self.text_system()
             .reuse_layouts(range.start.line_layout_index..range.end.line_layout_index);
@@ -809,9 +971,11 @@ impl Window {
                 absolute_offset: deferred_draw.absolute_offset,
                 prepaint_range: deferred_draw.prepaint_range.clone(),
                 paint_range: deferred_draw.paint_range.clone(),
+                accessed_entities: deferred_draw.accessed_entities.clone(),
                 enclosing_retained: EnclosingRetained::default(),
             });
         }
+        removed_states
     }
 
     /// Copies last frame's records `records`, whose prepaint was copied from
@@ -823,6 +987,7 @@ impl Window {
         records: Range<usize>,
         from: &PrepaintStateIndex,
         to: &PrepaintStateIndex,
+        removed_states: &[usize],
         (segment, anchor): (usize, usize),
         copied: &mut Vec<(usize, usize)>,
     ) {
@@ -831,8 +996,19 @@ impl Window {
         copied.reserve(records.len());
         for index in records {
             let record = &source.records[index];
-            let prepaint_range = record.prepaint_range.start.shifted(from, to)
+            let mut prepaint_range = record.prepaint_range.start.shifted(from, to)
                 ..record.prepaint_range.end.shifted(from, to);
+            if !removed_states.is_empty() {
+                // Each boundary loses only accesses removed before it.
+                prepaint_range.start.accessed_element_states_index -= removed_states
+                    .partition_point(|&removed| {
+                        removed < record.prepaint_range.start.accessed_element_states_index
+                    });
+                prepaint_range.end.accessed_element_states_index -=
+                    removed_states.partition_point(|&removed| {
+                        removed < record.prepaint_range.end.accessed_element_states_index
+                    });
+            }
             let painted = matches!(record.paint, PaintStatus::Painted { .. });
             let mut copy = copy_record(record, prepaint_range, anchor);
             if !painted {
@@ -949,6 +1125,76 @@ impl Window {
             .clone();
         self.add_nested_hovers(&all);
     }
+}
+
+fn copy_splice_state_accesses(
+    window: &mut Window,
+    range: Range<usize>,
+    gaps: &[Gap],
+) -> Vec<usize> {
+    if range.is_empty() {
+        return Vec::new();
+    }
+    let source = &window.rendered_frame;
+    let states = &source.accessed_element_states[range.clone()];
+    let target = &mut window.next_frame;
+    if gaps.is_empty() {
+        target.accessed_element_states.extend_from_slice(states);
+        Vec::new()
+    } else {
+        match gaps {
+            [gap] => {
+                let prefix = &gap.global_id.ids;
+                let depth = prefix.len() - 1;
+                let view = &prefix[depth];
+                copy_state_accesses(
+                    states,
+                    &mut target.accessed_element_states,
+                    range.start,
+                    |id| id.ids.get(depth) == Some(view) && id.ids.starts_with(prefix),
+                )
+            }
+            _ => copy_state_accesses(
+                states,
+                &mut target.accessed_element_states,
+                range.start,
+                |id| {
+                    gaps.iter().any(|gap| {
+                        let prefix = &gap.global_id.ids;
+                        id.ids.get(prefix.len() - 1) == prefix.last() && id.ids.starts_with(prefix)
+                    })
+                },
+            ),
+        }
+    }
+}
+
+/// A gap's state accesses may occur anywhere, including in another view's
+/// prepaint. Only the actual accesses prove that a copied stretch needs no
+/// filtering. Copy its clean prefix in bulk, then filter after the first match.
+fn copy_state_accesses(
+    states: &[(GlobalElementId, TypeId)],
+    target: &mut Vec<(GlobalElementId, TypeId)>,
+    start: usize,
+    in_gap: impl Fn(&GlobalElementId) -> bool,
+) -> Vec<usize> {
+    let Some(first) = states.iter().position(|(id, _)| in_gap(id)) else {
+        target.extend_from_slice(states);
+        return Vec::new();
+    };
+    target.extend_from_slice(&states[..first]);
+    let mut removed = vec![start + first];
+    target.extend(states[first + 1..].iter().enumerate().filter_map(
+        |(offset, state @ (id, _))| {
+            if in_gap(id) {
+                removed.push(start + first + 1 + offset);
+                None
+            } else {
+                Some(state.clone())
+            }
+        },
+    ));
+    removed
 }
 
 /// A copy of `record`, with its prepaint at `prepaint_range` in this frame and

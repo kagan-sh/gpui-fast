@@ -505,6 +505,7 @@ impl<E: Element> Drawable<E> {
                         }
                         self.element
                             .a11y_synthetic_children(&mut prepaint, &mut builder);
+                        crate::fast::a11y::finish_synthetic_children(builder);
                     }
                     window.a11y.nodes.pop();
                 }
@@ -964,7 +965,7 @@ mod global_element_id_tests {
         for (items, depth) in [(500, 4), (500, 12), (2000, 12)] {
             let window = cx.add_window(move |_, _| DeepStatefulTree { items, depth });
             let window = crate::AnyWindowHandle::from(window);
-            let mut frame = |cx: &mut crate::TestAppContext| {
+            let frame = |cx: &mut crate::TestAppContext| {
                 cx.update_window(window, |_, window, cx| {
                     window.refresh();
                     let started = std::time::Instant::now();

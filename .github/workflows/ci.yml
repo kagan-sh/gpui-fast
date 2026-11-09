@@ -45,6 +45,14 @@ jobs:
       - name: Test gpui
         run: cargo test -p gpui --features test-support
 
+      - name: Test composition on WGPU
+        if: runner.os == 'Linux'
+        run: cargo test -p gpui_linux fast::composition -- --nocapture
+
+      - name: Test composition on Metal
+        if: runner.os == 'macOS'
+        run: cargo test -p gpui_macos fast::composition -- --nocapture
+
       - name: Link GPUI Fast with GPUI Pre
         if: runner.os == 'Windows'
         run: cargo test -p gpui_perf --features fast,upstream --test windows_manifest_coexistence
@@ -54,6 +62,10 @@ jobs:
       - name: Test scroll layers on Metal
         if: runner.os == 'macOS'
         run: cargo test -p gpui_apple fast::layers -- --nocapture
+
+      - name: Test GPU-written dynamic textures on WGPU
+        if: runner.os == 'macOS'
+        run: cargo test -p gpui_wgpu --features test-support fast::dynamic_textures -- --nocapture
 
       - name: Test scroll layers on Direct3D
         if: runner.os == 'Windows'
