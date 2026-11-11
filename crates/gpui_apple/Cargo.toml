@@ -17,6 +17,7 @@ default = []
 bench-support = ["gpui/bench-support"]
 test-support = ["gpui/test-support"]
 runtime_shaders = []
+offscreen = []
 font-kit = ["dep:font-kit", "dep:core-text", "dep:objc2-core-text", "dep:pathfinder_geometry"]
 
 [dependencies]

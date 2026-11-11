@@ -31,6 +31,8 @@ test-support = [
     "dep:web-time",
 ]
 bench-support = ["profiler", "dep:criterion", "dep:bench_metrics"]
+# Offscreen windows: a window that is never shown can render its scene to an image.
+offscreen = []
 # Preserve the published feature name while consumers migrate to `bench-support`.
 bench = ["bench-support"]
 inspector = ["gpui_macros/inspector"]
