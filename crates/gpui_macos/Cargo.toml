@@ -1,5 +1,5 @@
 [package]
-name = "gpui_macos"
+name = "gpui-fast-macos"
 version = "0.1.14"
 edition.workspace = true
 publish.workspace = true
@@ -9,6 +9,7 @@ license = "Apache-2.0"
 workspace = true
 
 [lib]
+name = "gpui_macos"
 path = "src/gpui_macos.rs"
 doctest = false
 

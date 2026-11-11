@@ -1,5 +1,5 @@
 [package]
-name = "gpui"
+name = "gpui-fast"
 version = "0.1.14"
 edition.workspace = true
 authors = ["Nathan Sobo <nathan@zed.dev>"]
@@ -61,6 +61,7 @@ hot-reload = [
 ]
 
 [lib]
+name = "gpui"
 path = "src/gpui.rs"
 
 [dependencies]

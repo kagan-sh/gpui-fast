@@ -1,5 +1,5 @@
 [package]
-name = "gpui_web"
+name = "gpui-fast-web"
 version = "0.1.14"
 publish.workspace = true
 edition.workspace = true
@@ -14,6 +14,7 @@ default = ["multithreaded"]
 multithreaded = ["dep:wasm_thread", "scheduler/wasm-threads"]
 
 [lib]
+name = "gpui_web"
 path = "src/gpui_web.rs"
 doctest = false
 

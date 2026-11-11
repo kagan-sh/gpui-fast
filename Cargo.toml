@@ -60,17 +60,17 @@ bytemuck = "1"
 bench_metrics = { path = "crates/bench_metrics" }
 collections = { path = "crates/collections", version = "0.1.0" }
 derive_refineable = { path = "crates/refineable/derive_refineable" }
-gpui = { path = "crates/gpui", default-features = false }
-gpui_apple = { path = "crates/gpui_apple" }
+gpui = { package = "gpui-fast", path = "crates/gpui", default-features = false }
+gpui_apple = { package = "gpui-fast-apple", path = "crates/gpui_apple" }
 gpui_ios = { path = "crates/gpui_ios" }
-gpui_linux = { path = "crates/gpui_linux", default-features = false }
-gpui_macos = { path = "crates/gpui_macos", default-features = false }
-gpui_macros = { path = "crates/gpui_macros" }
-gpui_platform = { path = "crates/gpui_platform", default-features = false }
+gpui_linux = { package = "gpui-fast-linux", path = "crates/gpui_linux", default-features = false }
+gpui_macos = { package = "gpui-fast-macos", path = "crates/gpui_macos", default-features = false }
+gpui_macros = { package = "gpui-fast-macros", path = "crates/gpui_macros" }
+gpui_platform = { package = "gpui-fast-platform", path = "crates/gpui_platform", default-features = false }
 gpui_shared_string = { path = "crates/gpui_shared_string" }
 gpui_util = { path = "crates/gpui_util" }
-gpui_web = { path = "crates/gpui_web", default-features = false }
-gpui_wgpu = { path = "crates/gpui_wgpu" }
+gpui_web = { package = "gpui-fast-web", path = "crates/gpui_web", default-features = false }
+gpui_wgpu = { package = "gpui-fast-wgpu", path = "crates/gpui_wgpu" }
 gpui_windows = { path = "crates/gpui_windows", default-features = false }
 http_client = { path = "crates/http_client" }
 http_client_tls = { path = "crates/http_client_tls" }
