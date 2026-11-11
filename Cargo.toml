@@ -37,6 +37,8 @@ members = [
     "crates/ztracing_macro",
     "tooling/perf",
 ]
+# Published-form copies of the crates kagan patches; see release/README.md.
+exclude = ["release"]
 default-members = ["crates/gpui"]
 
 [workspace.package]
