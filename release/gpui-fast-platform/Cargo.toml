@@ -39,6 +39,8 @@ repository = "https://github.com/longbridge/gpui-fast"
 resolver = "2"
 
 [features]
+# Offscreen windows render their scene to an image; see the fork's offscreen-on-pin branch.
+offscreen = ["gpui/offscreen", "gpui_macos/offscreen"]
 bench-support = [
     "gpui/bench-support",
     "gpui_macos/bench-support",
