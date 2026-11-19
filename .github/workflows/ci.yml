@@ -45,6 +45,9 @@ jobs:
       - name: Test gpui
         run: cargo test -p gpui --features test-support
 
+      - name: Test scheduler's clock
+        run: cargo test -p scheduler fast::clock
+
       - name: Test composition on WGPU
         if: runner.os == 'Linux'
         run: cargo test -p gpui_linux fast::composition -- --nocapture
@@ -52,6 +55,10 @@ jobs:
       - name: Test composition on Metal
         if: runner.os == 'macOS'
         run: cargo test -p gpui_macos fast::composition -- --nocapture
+
+      - name: Test macOS menu callbacks
+        if: runner.os == 'macOS'
+        run: cargo test -p gpui_macos fast::menu -- --nocapture
 
       - name: Link GPUI Fast with GPUI Pre
         if: runner.os == 'Windows'

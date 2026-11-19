@@ -116,8 +116,17 @@ each frame it then takes one of three paths (`fast::layers::policy::decide`):
   - the background under the viewport is not one opaque solid quad (a
     list's rows are replayed over whatever is under them instead);
   - the content has deferred or anchored elements, a focused input, or
-    surfaces, or something in it (an element, or a view drawn in it) asked
-    for an animation frame this frame or the last;
+    surfaces, places a native or external GPU composition surface as it is
+    prepainted (a web view setting its bounds, which a composited frame
+    would not do, leaving the surface where the content was), or something
+    in it (an element, or a view drawn in it) asked for an animation frame
+    this frame or the last. Whether it still does is only known by
+    painting it into the layer again, which costs a repaint for nothing
+    while it does: the layer is dropped but not demoted, and
+    painted again 8 frames later, then twice as long after each attempt
+    that finds the content as it was, up to 256 frames
+    (`fast::layers::policy::RETRY_AFTER_INELIGIBLE_FRAMES`). The focus
+    leaving an input in the content ends the wait at once;
   - the view holding the container asked for an animation frame from
     outside the content (a scrollbar fading beside a list, a pulsing
     button): it renders again on every frame the animation runs, and
