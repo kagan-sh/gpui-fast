@@ -5,6 +5,7 @@ mod fast_rounded_clip_shader;
 
 fn main() {
     crate::fast_rounded_clip_shader::stage();
+    embed_test_manifest();
     #[cfg(not(all(target_os = "windows", not(debug_assertions))))]
     println!("cargo:rerun-if-changed=build.rs");
     #[cfg(target_os = "windows")]
@@ -233,3 +234,16 @@ mod shader_compilation {
 
 #[cfg(all(target_os = "windows", not(debug_assertions)))]
 use shader_compilation::compile_shaders;
+
+// The lib's test program imports TaskDialogIndirect, which only comctl32 v6 exports. Without this
+// manifest Windows binds comctl32 v5 and refuses to start it (STATUS_ENTRYPOINT_NOT_FOUND). The
+// link argument stays in this package, so applications still embed their own manifest.
+fn embed_test_manifest() {
+    let resource_dir = std::path::Path::new("resources/windows");
+    let rc_file = resource_dir.join("gpui.rc");
+    println!("cargo:rerun-if-changed={}", rc_file.display());
+    println!("cargo:rerun-if-changed={}", resource_dir.join("gpui.manifest.xml").display());
+    embed_resource::compile_for_everything(rc_file, embed_resource::ParamsIncludeDirs([resource_dir]))
+        .manifest_required()
+        .unwrap();
+}
