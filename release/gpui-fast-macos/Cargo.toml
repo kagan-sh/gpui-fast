@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "gpui-fast-macos"
-version = "0.1.14"
+version = "0.1.17"
 authors = ["Longbridge"]
 build = false
 include = [
@@ -32,15 +32,13 @@ autotests = false
 autobenches = false
 description = "gpui_macos: GPUI with gpui-fast rendering and layout optimizations"
 homepage = "https://github.com/longbridge/gpui-fast"
-documentation = "https://docs.rs/gpui-fast-macos/0.1.14/gpui_macos/"
+documentation = "https://docs.rs/gpui-fast-macos/0.1.17/gpui_macos/"
 readme = "README.md"
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 resolver = "2"
 
 [features]
-# Offscreen windows render their scene to an image; see the fork's offscreen-on-pin branch.
-offscreen = ["gpui/offscreen", "gpui_apple/offscreen"]
 bench-support = [
     "gpui/bench-support",
     "gpui_apple/bench-support",
@@ -64,7 +62,7 @@ path = "src/gpui_macos.rs"
 doctest = false
 
 [dependencies.gpui]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast"
 
@@ -113,7 +111,7 @@ version = "0.5"
 version = "0.3.34"
 
 [target.'cfg(target_os = "macos")'.dependencies.gpui_apple]
-version = "^0.1.14"
+version = "^0.1.17"
 package = "gpui-fast-apple"
 
 [target.'cfg(target_os = "macos")'.dependencies.gpui_util]
@@ -191,7 +189,7 @@ features = [
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-core-graphics]
-version = "=0.3.2"
+version = "0.3.2"
 features = [
     "CGDirectDisplay",
     "CGColor",
@@ -200,7 +198,7 @@ features = [
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-core-media]
-version = "=0.3.2"
+version = "0.3.2"
 features = [
     "CMSampleBuffer",
     "objc2-core-video",
@@ -209,7 +207,7 @@ optional = true
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-core-video]
-version = "=0.3.2"
+version = "0.3.2"
 features = [
     "CVBuffer",
     "CVImageBuffer",
@@ -218,7 +216,7 @@ features = [
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-foundation]
-version = "=0.3.2"
+version = "0.3.2"
 features = [
     "NSArray",
     "NSAttributedString",
@@ -246,7 +244,7 @@ features = [
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-quartz-core]
-version = "=0.3.2"
+version = "0.3.2"
 features = [
     "std",
     "CALayer",
@@ -257,7 +255,7 @@ features = [
 default-features = false
 
 [target.'cfg(target_os = "macos")'.dependencies.objc2-screen-capture-kit]
-version = "=0.3.2"
+version = "0.3.2"
 features = [
     "block2",
     "dispatch2",
@@ -308,6 +306,13 @@ package = "gpui-pre-scheduler"
 [target.'cfg(target_os = "macos")'.dependencies.semver]
 version = "1.0"
 features = ["serde"]
+
+[target.'cfg(target_os = "macos")'.dependencies.serde_json]
+version = "1.0.144"
+features = [
+    "preserve_order",
+    "raw_value",
+]
 
 [target.'cfg(target_os = "macos")'.dependencies.smallvec]
 version = "1.6"

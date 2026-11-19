@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 name = "gpui-fast-platform"
-version = "0.1.14"
+version = "0.1.17"
 authors = ["Longbridge"]
 build = false
 include = [
@@ -32,15 +32,13 @@ autotests = false
 autobenches = false
 description = "gpui_platform: GPUI with gpui-fast rendering and layout optimizations"
 homepage = "https://github.com/longbridge/gpui-fast"
-documentation = "https://docs.rs/gpui-fast-platform/0.1.14/gpui_platform/"
+documentation = "https://docs.rs/gpui-fast-platform/0.1.17/gpui_platform/"
 readme = "README.md"
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
 resolver = "2"
 
 [features]
-# Offscreen windows render their scene to an image; see the fork's offscreen-on-pin branch.
-offscreen = ["gpui/offscreen", "gpui_macos/offscreen"]
 bench-support = [
     "gpui/bench-support",
     "gpui_macos/bench-support",
@@ -78,12 +76,12 @@ doctest = false
 version = "1.0.86"
 
 [dependencies.gpui]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast"
 
 [target.'cfg(all(any(target_os = "linux", target_os = "freebsd"), not(target_env = "ohos")))'.dependencies.gpui_linux]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast-linux"
 
@@ -91,7 +89,7 @@ package = "gpui-fast-linux"
 version = "0.1.7"
 
 [target.'cfg(target_family = "wasm")'.dependencies.gpui_web]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast-web"
 
@@ -100,23 +98,23 @@ version = "=0.3.12"
 package = "gpui-pre-ios"
 
 [target.'cfg(target_os = "linux")'.dependencies.gpui_wgpu]
-version = "^0.1.14"
+version = "^0.1.17"
 optional = true
 package = "gpui-fast-wgpu"
 
 [target.'cfg(target_os = "macos")'.dependencies.gpui_macos]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast-macos"
 
 [target.'cfg(target_os = "windows")'.dependencies.gpui]
-version = "^0.1.14"
+version = "^0.1.17"
 features = ["windows-manifest"]
 default-features = false
 package = "gpui-fast"
 
 [target.'cfg(target_os = "windows")'.dependencies.gpui_windows]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast-windows"
 
