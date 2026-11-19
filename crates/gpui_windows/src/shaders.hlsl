@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 #include "alpha_correction.hlsl"
 
 cbuffer GlobalParams: register(b0) {

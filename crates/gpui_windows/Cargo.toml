@@ -2,7 +2,7 @@
 [package]
 edition = "2024"
 name = "gpui-fast-windows"
-version = "0.1.14"
+version = "0.1.17"
 authors = ["Longbridge"]
 build = "build.rs"
 include = [
@@ -22,7 +22,7 @@ autotests = false
 autobenches = false
 description = "gpui_windows: GPUI with gpui-fast rendering and layout optimizations"
 homepage = "https://github.com/longbridge/gpui-fast"
-documentation = "https://docs.rs/gpui-fast-windows/0.1.14/gpui_windows/"
+documentation = "https://docs.rs/gpui-fast-windows/0.1.17/gpui_windows/"
 readme = "README.md"
 license = "Apache-2.0"
 repository = "https://github.com/longbridge/gpui-fast"
@@ -43,7 +43,7 @@ path = "src/gpui_windows.rs"
 doctest = false
 
 [dependencies.gpui]
-version = "^0.1.14"
+version = "^0.1.17"
 default-features = false
 package = "gpui-fast"
 

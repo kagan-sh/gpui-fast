@@ -23,5 +23,4 @@ pub(crate) mod initial_placement;
 pub(crate) mod layers;
 #[cfg(all(test, feature = "native-tests"))]
 pub(crate) mod native_tests;
-pub(crate) mod partial;
 pub(crate) mod rounded_clip;
